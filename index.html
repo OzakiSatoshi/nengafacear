@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!--TensorFlow関連の読み込み-->
+    <script src="https://unpkg.com/@tensorflow/tfjs-core@2.1.0/dist/tf-core.js"></script>
+    <script src="https://unpkg.com/@tensorflow/tfjs-converter@2.1.0/dist/tf-converter.js"></script>
+    <script src="https://unpkg.com/@tensorflow/tfjs-backend-webgl@2.1.0/dist/tf-backend-webgl.js"></script>
+    <!--FaceMesh(顔認識の学習モデル)-->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/facemesh"></script>
+    <!--three.js：あとで顔のメッシュ描画の際に使用する-->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/110/three.min.js"></script> 
+    <!--用意してくれているthree.jsの初期設定スクリプト-->
+    <script src="threejs-ex.js"></script>
+    <!--三角形の頂点の接続情報-->
+    <script src="triangulation.js"></script>
+    <!--三角形の頂点の接続情報-->
+    <script src="uv-coords.js"></script>
+    
+    <!--以下に自前のスクリプトを記述していく-->
+    <script type="text/javascript">
+      
+      var video; //ビデオを扱う変数
+      var model; //顔認識のための学習モデル
+      var faceMesh; //顔の3Dデータ
+      
+       //ページを読み終わったら実行
+      window.onload = function(){
+        let constraints = { video:{width: 640,height:480}};
+        //カメラデバイスの取得
+        navigator.mediaDevices.getUserMedia(constraints).then(
+          function(mediaStream){
+            //body内のid=videoの要素を取得
+            video = document.getElementById("video");
+            //リアルタイムの映像をvideo要素に対応付ける
+            video.srcObject = mediaStream;
+            //準備が整ったら再生
+            video.onloadedmetadata = function(e){
+              video.play();
+            
+              InitRendering(); //Three.jsでの描画に関するセッティング
+              CreateFaceObject(); //顔の3Dモデルを作成
+              StartTracking(); //顔認識
+            };
+          }          
+        );
+      }
+            
+      function CreateFaceObject(){
+        //顔の形状をGeometryで管理
+        let geometry = new THREE.Geometry();
+        
+        //頂点を登録（座標は今のところ適当）
+        for(let i=0;i < 468;i++){
+          geometry.vertices.push(new THREE.Vector3(0,0,0));
+        }
+        
+        //頂点の接続情報
+        let index,p0,p1,p2;
+        for(let i=0;i<TRIANGULATION.length / 3;i++){
+          index=i*3;
+          p0 = TRIANGULATION[index];
+          p1 = TRIANGULATION[index+1];
+          p2 = TRIANGULATION[index+2];
+          geometry.faces.push(new THREE.Face3(p0,p1,p2));
+          //UV座標を指定
+          geometry.faceVertexUvs[0].push([
+            new THREE.Vector2(UV_COORDS[p0][0],1-UV_COORDS[p0][1]),
+            new THREE.Vector2(UV_COORDS[p1][0],1-UV_COORDS[p1][1]),
+            new THREE.Vector2(UV_COORDS[p2][0],1-UV_COORDS[p2][1])]);
+        }
+        let texture = new THREE.TextureLoader().load("https://cdn.glitch.me/9c4f980f-c547-409d-839b-73e8dc8ce459%2Ftora.png?v=1636675279461");
+    
+        //色などの見た目情報をMaterialに登録
+        //let material = new THREE.PointsMaterial({color:0x000FF,size:3});
+        //let material = new THREE.MeshBasicMaterial({wireframe:true});
+        let material = new THREE.MeshBasicMaterial({map:texture,alphaTest:0.1});
+        
+        //faceMeshに形状（geometry）と見た目（material）を登録
+        //faceMesh = new THREE.Points(geometry,material);
+        faceMesh = new THREE.Mesh(geometry,material);
+        
+        //thress.jsに登録（threejs-ex.js内で処理）
+        AddToThreejs(faceMesh);
+      }
+      
+      //Three.jsで描画するための準備
+      function InitRendering(){
+        //ビデオ表示領域のサイズを明確に設定
+        let videoWidth = video.videoWidth;
+        let videoHeight = video.videoHeight;
+        video.width = videoWidth;
+        video.height = videoHeight;
+        //描画領域のサイズを指定
+        let canvas = document.getElementById("output");
+        canvas.width = videoWidth;
+        canvas.height = videoHeight;
+        //描画に関する初期設定（Threejs-ex.js内）
+        InitThreejs(canvas);
+      }
+      
+      //トラッキング開始準備の関数
+          async function StartTracking(){
+            //顔認識のための学習モデル読み込み
+            model = await facemesh.load();
+            //顔認識のループ（次のステップで使用）
+            FaceTrackingLoop();
+          }
+          
+          //顔検出と描画のループ
+          async function FaceTrackingLoop(){
+            //顔の検出
+            let predictions = await model.estimateFaces(video);
+            //見つかった顔が1つ以上あれば
+            if(predictions.length > 0){
+              //検出された顔の頂点配列にアクセス
+              let keypoints = predictions[0].scaledMesh;
+              //顔の3Dモデルの頂点等の情報にアクセス
+              let geometry = faceMesh.geometry;
+              for(let i = 0;i < keypoints.length;i++){
+                let x = keypoints[i][0];
+                let y = keypoints[i][1];
+                geometry.vertices[i].set(x-video.width/2,-y+video.height/2,1);
+              }
+              //情報の更新を許可
+              faceMesh.geometry.verticesNeedUpdate = true;
+              //検出された顔の情報にアクセスして表示
+              //console.log(predictions[0]);
+            }
+            RenderThreejs();
+            requestAnimationFrame(FaceTrackingLoop);
+          }
+    </script>
+    
+  </head>
+  
+  <body>
+    <!--ここで表示領域をレイアウトしていく-->
+    <video id="video" style="position: absolute;"></video>
+    <canvas id="output" style="position: absolute;"></canvas>
+  </body>
+</html>
+
